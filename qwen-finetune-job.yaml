@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: qwen25-7b-finetune-job # Job 的名称
+  namespace: r2d2             # 确保这个 namespace 存在
+spec:
+  template:
+    metadata:
+      labels:
+        app: qwen-finetune # Pod 的标签
+    spec:
+      # --- GPU 节点调度 ---
+      nodeSelector:
+        orbit.bmw.de/gpu: supported
+        karpenter.k8s.aws/instance-size: "4xlarge" # g5.4xlarge 应该满足这个要求
+        karpenter.k8s.aws/instance-family: "g5"
+      tolerations:
+        - key: "orbit.bmw.de/gpu"
+          operator: "Equal"
+          value: "supported"
+          effect: "NoSchedule"
+        - key: "nvidia.com/gpu"
+          operator: "Exists" # 容忍有 nvidia.com/gpu 污点的节点
+          effect: "NoSchedule"
+      # --- Pod 配置 ---
+      containers:
+        - name: unsloth-finetune-container
+          image: 974677654443.dkr.ecr.eu-central-1.amazonaws.com/ai-lab/r2d2/finetune:v1.0 # *** 替换为你构建并推送的 Docker 镜像 ***
+          imagePullPolicy: Always # 或者 IfNotPresent
+          command: ["python3", "finetune_qwen.py"] # 运行 Python 脚本
+          args:
+            # 通过参数传递 S3 路径给脚本
+            - "--save-to-s3"
+            - "s3://cd4ml-ai-lab-eu-central-1-test-r2d2/llm_finetune_poc_20250417/qwen25-7b-finetuned-$(date +%Y%m%d-%H%M%S)" # *** S3 目标路径 ***
+          resources:
+            limits:
+              nvidia.com/gpu: 1 # 请求 1 个 GPU
+              memory: "60Gi"    # g5.4xlarge 有 64 GiB 内存，为 GPU 和系统预留一些
+              cpu: "14"         # g5.4xlarge 有 16 vCPU，请求大部分
+            requests:
+              nvidia.com/gpu: 1 # 必须请求 GPU 才能被调度
+              memory: "48Gi"    # 请求大部分内存
+              cpu: "8"          # 请求一些 CPU
+          # --- AWS S3 访问凭证配置 ---
+          # **推荐使用 IRSA (IAM Roles for Service Accounts)**
+          # 如果配置了 IRSA，你只需要指定 serviceAccountName
+          # serviceAccountName: your-irsa-enabled-service-account # 取消注释并替换
+          #
+          # **或者，使用 Kubernetes Secrets 挂载 AWS 凭证 (不推荐用于生产环境)**
+          # 需要先创建一个名为 'aws-s3-credentials' 的 Secret，包含 AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+          # envFrom:
+          #   - secretRef:
+          #       name: aws-s3-credentials # 包含 AWS 凭证的 Secret 名称
+          env:
+            # 确保设置正确的 AWS 区域，boto3 可能需要
+            - name: AWS_REGION
+              value: "eu-central-1" # *** 替换为你的 S3 存储桶所在的区域 ***
+            # 设置 HF_HOME 和 TRANSFORMERS_CACHE 到持久卷或 emptyDir 可以加速后续运行（可选）
+            # - name: HF_HOME
+            #   value: "/cache/huggingface"
+            # - name: TRANSFORMERS_CACHE
+            #   value: "/cache/huggingface/transformers"
+          # volumeMounts: # 如果使用缓存卷
+          #   - name: cache-volume
+          #     mountPath: /cache
+      # volumes: # 如果使用缓存卷
+      #   - name: cache-volume
+      #     emptyDir: {} # 或者使用 PV/PVC
+      # --- Job 重启策略 ---
+      restartPolicy: Never # Job 完成或失败后不重启 Pod
+      # --- 其他 Job 设置 ---
+      backoffLimit: 1 # 如果 Pod 失败，只重试 1 次（总共尝试 2 次）
+      # activeDeadlineSeconds: 36000 # 设置 Job 的最大运行时长（例如 10 小时），可选
+  # --- Job 完成策略 (可选) ---
+  # completions: 1 # 需要成功完成 1 个 Pod
+  # parallelism: 1 # 一次只运行 1 个 Pod

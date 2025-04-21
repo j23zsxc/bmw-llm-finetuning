@@ -1,0 +1,28 @@
+# Python virtual environment
+venv/
+
+# Git disabled directory
+.git_disabled/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# IDE settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment variables
+.env
+.env.local
+
+# Other
+.DS_Store
